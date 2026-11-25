@@ -4,10 +4,10 @@ import java.util.Optional;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 
-import com.sprint.bank.entity.AppUser;
+import com.sprint.bank.user.entity.User;
 
-public interface UserRepository extends JpaRepository<AppUser, Long> {
-	Optional<AppUser> findByEmail(String email);
+public interface UserRepository extends JpaRepository<User, Long> {
+    Optional<User> findByEmail(String email);
 
-	boolean existsByEmail(String email);
+    boolean existsByEmail(String email);
 }

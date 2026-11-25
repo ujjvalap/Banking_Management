@@ -1,10 +1,16 @@
 package com.sprint.bank.dto;
 
+
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Size;
 
 public record LoginRequest(
-		@NotBlank @Email @Size(max = 254) String email,
-		@NotBlank @Size(min = 8, max = 72) String password) {
-}
+
+        @NotBlank(message = "Email is required")
+        @Email(message = "Enter a valid email address")
+        String email,
+
+        @NotBlank(message = "Password is required")
+        String password
+
+) {}

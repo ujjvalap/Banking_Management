@@ -19,27 +19,27 @@ import com.sprint.bank.service.AuthService;
 import jakarta.validation.Valid;
 
 @RestController
-@RequestMapping("/api/auth")
+@RequestMapping({"/api/v1", "/api/auth"})
 public class AuthController {
-	private final AuthService authService;
+    private final AuthService authService;
 
-	public AuthController(AuthService authService) {
-		this.authService = authService;
-	}
+    public AuthController(AuthService authService) {
+        this.authService = authService;
+    }
 
-	@PostMapping("/register")
-	@ResponseStatus(HttpStatus.CREATED)
-	public AuthResponse register(@Valid @RequestBody RegisterRequest request) {
-		return authService.register(request);
-	}
+    @PostMapping("/register")
+    @ResponseStatus(HttpStatus.CREATED)
+    public AuthResponse register(@Valid @RequestBody RegisterRequest request) {
+        return authService.register(request);
+    }
 
-	@PostMapping("/login")
-	public AuthResponse login(@Valid @RequestBody LoginRequest request) {
-		return authService.login(request);
-	}
+    @PostMapping("/login")
+    public AuthResponse login(@Valid @RequestBody LoginRequest request) {
+        return authService.login(request);
+    }
 
-	@GetMapping("/me")
-	public UserResponse currentUser(@AuthenticationPrincipal UserDetails userDetails) {
-		return authService.getCurrentUser(userDetails.getUsername());
-	}
+    @GetMapping("/me")
+    public UserResponse currentUser(@AuthenticationPrincipal UserDetails userDetails) {
+        return authService.getCurrentUser(userDetails.getUsername());
+    }
 }

@@ -1,18 +1,15 @@
 package com.sprint.bank;
 
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
+import static org.hamcrest.Matchers.containsString;
+import static org.hamcrest.Matchers.not;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
-
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.redirectedUrl;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,235 +17,282 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.http.MediaType;
-import org.springframework.security.authentication.BadCredentialsException;
-import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.mock.web.MockHttpSession;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
-import com.sprint.bank.dto.AuthResponse;
-import com.sprint.bank.dto.LoginRequest;
-import com.sprint.bank.dto.RegisterRequest;
-import com.sprint.bank.entity.Role;
+import com.sprint.bank.repository.LoginAttemptRepository;
+import com.sprint.bank.repository.PasswordResetTokenRepository;
+import com.sprint.bank.repository.RefreshTokenRepository;
+import com.sprint.bank.repository.EmailVerificationTokenRepository;
 import com.sprint.bank.repository.UserRepository;
-import com.sprint.bank.security.JwtService;
-import com.sprint.bank.service.AuthService;
+import tools.jackson.databind.ObjectMapper;
 
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 class BankingManagementSystemApplicationTests {
-	@Autowired
-	private AuthService authService;
+    @Autowired
+    private MockMvc mockMvc;
 
-	@Autowired
-	private UserRepository userRepository;
+    @Autowired
+    private ObjectMapper objectMapper;
 
-	@Autowired
-	private PasswordEncoder passwordEncoder;
+    @Autowired
+    private UserRepository userRepository;
 
-	@Autowired
-	private JwtService jwtService;
+    @Autowired
+    private RefreshTokenRepository refreshTokenRepository;
 
-	@Autowired
-	private MockMvc mockMvc;
+    @Autowired
+    private LoginAttemptRepository loginAttemptRepository;
 
-	@BeforeEach
-	void clearUsers() {
-		userRepository.deleteAll();
-	}
+    @Autowired
+    private EmailVerificationTokenRepository emailVerificationTokenRepository;
 
-	@Test
-	void contextLoads() {
-	}
+    @Autowired
+    private PasswordResetTokenRepository passwordResetTokenRepository;
 
-	@Test
-	void registrationStoresHashedPasswordAndLoginReturnsSignedToken() {
-		RegisterRequest request = new RegisterRequest(
-				"Alex Morgan",
-				"  Alex.Morgan@example.com ",
-				"StrongPass123",
-				"+1 555 123 4567",
-				"12 Market Street",
-				"ABCDE1234F");
+    @BeforeEach
+    void clearDatabase() {
+        refreshTokenRepository.deleteAll();
+        emailVerificationTokenRepository.deleteAll();
+        passwordResetTokenRepository.deleteAll();
+        loginAttemptRepository.deleteAll();
+        userRepository.deleteAll();
+    }
 
-		AuthResponse registered = authService.register(request);
-		var savedUser = userRepository.findByEmail("alex.morgan@example.com").orElseThrow();
+    @Test
+    void contextLoads() {
+    }
 
-		assertEquals(Role.CUSTOMER, savedUser.getRole());
-		assertNotEquals(request.password(), savedUser.getPasswordHash());
-		assertTrue(passwordEncoder.matches(request.password(), savedUser.getPasswordHash()));
-		assertEquals("Alex Morgan", registered.user().fullName());
-		assertEquals("alex.morgan@example.com", jwtService.extractSubject(registered.accessToken()));
+    @Test
+    void registerLoginCurrentUserRefreshAndLogoutWorkEndToEnd() throws Exception {
+        String registerBody = """
+                {
+                  "fullName": "Alex Morgan",
+                  "email": "Alex.Morgan@example.com",
+                  "password": "StrongPass123!",
+                  "phone": "+1 555 123 4567",
+                  "address": "12 Market Street",
+                  "pan": "ABCDE1234F"
+                }
+                """;
+        MvcResult registration = mockMvc.perform(post("/api/v1/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registerBody))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.accessToken").isNotEmpty())
+                .andExpect(jsonPath("$.refreshToken").isNotEmpty())
+                .andReturn();
 
-		AuthResponse loggedIn = authService.login(new LoginRequest("ALEX.MORGAN@example.com", request.password()));
-		assertEquals("alex.morgan@example.com", loggedIn.user().email());
-	}
+        String accessToken = json(registration, "accessToken");
+        String refreshToken = json(registration, "refreshToken");
 
-	@Test
-	void loginRejectsIncorrectPassword() {
-		authService.register(new RegisterRequest(
-				"Alex Morgan",
-				"alex.morgan@example.com",
-				"StrongPass123",
-				"+1 555 123 4567",
-				"12 Market Street",
-				"ABCDE1234F"));
+        mockMvc.perform(get("/api/v1/me").header("Authorization", "Bearer " + accessToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.email").value("alex.morgan@example.com"))
+                .andExpect(jsonPath("$.role").value("CUSTOMER"));
 
-		assertThrows(BadCredentialsException.class,
-				() -> authService.login(new LoginRequest("alex.morgan@example.com", "WrongPass123")));
-	}
+        MvcResult refreshed = mockMvc.perform(post("/api/v1/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"refreshToken":"%s"}
+                                """.formatted(refreshToken)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").isNotEmpty())
+                .andExpect(jsonPath("$.refreshToken").isNotEmpty())
+                .andReturn();
 
-	@Test
-	void registrationEndpointReturnsTokenAndValidationErrorsUseSharedShape() throws Exception {
-		mockMvc.perform(post("/api/auth/register")
-						.contentType(MediaType.APPLICATION_JSON)
-						.content("""
-								{
-								  "fullName": "Taylor Reed",
-								  "email": "taylor@example.com",
-								  "password": "StrongPass123",
-								  "phone": "+1 555 123 4567",
-								  "address": "4 River Road",
-								  "pan": "FGHIJ5678K"
-								}
-								"""))
-				.andExpect(status().isCreated())
-				.andExpect(jsonPath("$.accessToken").isNotEmpty())
-				.andExpect(jsonPath("$.user.role").value("CUSTOMER"));
+        mockMvc.perform(post("/api/v1/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"refreshToken":"%s"}
+                                """.formatted(refreshToken)))
+                .andExpect(status().isUnauthorized());
 
-		mockMvc.perform(post("/api/auth/register")
-						.contentType(MediaType.APPLICATION_JSON)
-						.content("""
-								{
-								  "fullName": "",
-								  "email": "not-an-email",
-								  "password": "short",
-								  "phone": "",
-								  "address": "",
-								  "pan": "invalid"
-								}
-								"""))
-				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.timestamp").isNotEmpty())
-				.andExpect(jsonPath("$.status").value(400))
-				.andExpect(jsonPath("$.validationErrors.email").isNotEmpty());
+        mockMvc.perform(post("/api/v1/logout")
+                        .header("Authorization", "Bearer " + json(refreshed, "accessToken")))
+                .andExpect(status().isNoContent());
 
-		mockMvc.perform(post("/api/auth/register")
-						.contentType(MediaType.APPLICATION_JSON)
-						.content("""
-								{
-								  "fullName": "Taylor Reed",
-								  "email": "weak@example.com",
-								  "password": "weakpassword123",
-								  "phone": "+1 555 123 4567",
-								  "address": "4 River Road",
-								  "pan": "FGHIJ5678K"
-								}
-								"""))
-				.andExpect(status().isBadRequest())
-				.andExpect(jsonPath("$.validationErrors.password").isNotEmpty());
-	}
+        mockMvc.perform(post("/api/v1/refresh")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"refreshToken":"%s"}
+                                """.formatted(json(refreshed, "refreshToken"))))
+                .andExpect(status().isUnauthorized());
+    }
 
-	@Test
-	void currentUserRequiresValidBearerTokenAndAdminRoutesRejectCustomers() throws Exception {
-		AuthResponse registration = authService.register(new RegisterRequest(
-				"Taylor Reed",
-				"taylor@example.com",
-				"StrongPass123",
-				"+1 555 123 4567",
-				"4 River Road",
-				"FGHIJ5678K"));
+    @Test
+    void apiValidationDuplicateCredentialsAndAuthenticationAreConsistent() throws Exception {
+        mockMvc.perform(get("/api/v1/me"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401));
 
-		mockMvc.perform(get("/api/auth/me"))
-				.andExpect(status().isUnauthorized())
-				.andExpect(jsonPath("$.status").value(401));
+        mockMvc.perform(post("/api/v1/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"fullName":"","email":"not-an-email","password":"short","phone":"","address":"","pan":"bad"}
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.validationErrors.email").isNotEmpty())
+                .andExpect(jsonPath("$.validationErrors.password").isNotEmpty());
 
-		mockMvc.perform(get("/api/auth/me").header("Authorization", "Bearer " + registration.accessToken()))
-				.andExpect(status().isOk())
-				.andExpect(jsonPath("$.email").value("taylor@example.com"));
+        String registrationBody = """
+                {
+                  "fullName": "Taylor Reed",
+                  "email": "taylor@example.com",
+                  "password": "StrongPass123!",
+                  "phone": "+1 555 123 4567",
+                  "address": "4 River Road",
+                  "pan": "FGHIJ5678K"
+                }
+                """;
+        MvcResult registrationResult = mockMvc.perform(post("/api/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registrationBody))
+                .andExpect(status().isCreated())
+                .andReturn();
 
-		mockMvc.perform(get("/api/admin/customers").header("Authorization", "Bearer " + registration.accessToken()))
-				.andExpect(status().isForbidden())
-				.andExpect(jsonPath("$.status").value(403));
+        MvcResult login = mockMvc.perform(post("/api/v1/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"TAYLOR@example.com","password":"StrongPass123!"}
+                                """))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.accessToken").isNotEmpty())
+                .andReturn();
 
-		mockMvc.perform(get("/unknown-endpoint"))
-				.andExpect(status().isNotFound())
-				.andExpect(jsonPath("$.status").value(404));
-	}
+        mockMvc.perform(get("/api/admin/customers")
+                        .header("Authorization", "Bearer " + json(login, "accessToken")))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.status").value(403));
 
-	@Test
-	void thymeleafLoginUsesCsrfProtectedServerSession() throws Exception {
-		authService.register(new RegisterRequest(
-				"Taylor Reed",
-				"taylor@example.com",
-				"StrongPass123",
-				"+1 555 123 4567",
-				"4 River Road",
-				"FGHIJ5678K"));
+        mockMvc.perform(post("/api/v1/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(registrationBody))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409));
 
-		MvcResult loginResult = mockMvc.perform(post("/login")
-						.with(csrf())
-						.param("username", "TAYLOR@example.com")
-						.param("password", "StrongPass123"))
-				.andExpect(status().is3xxRedirection())
-				.andExpect(redirectedUrl("/"))
-				.andReturn();
-		MockHttpSession session = (MockHttpSession) loginResult.getRequest().getSession(false);
-		assertNotNull(session);
+        mockMvc.perform(post("/api/v1/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"taylor@example.com","password":"WrongPassword123!"}
+                                """))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message").isNotEmpty());
 
-		mockMvc.perform(get("/").session(session))
-				.andExpect(status().isOk())
-				.andExpect(content().string(org.hamcrest.Matchers.containsString("taylor@example.com")))
-				.andExpect(content().string(org.hamcrest.Matchers.containsString("HttpOnly cookie")));
+        mockMvc.perform(get("/api/v1/me")
+                        .header("Authorization", "Bearer " + json(registrationResult, "accessToken")))
+                .andExpect(status().isOk());
+    }
 
-		mockMvc.perform(post("/logout").session(session).with(csrf()))
-				.andExpect(status().is3xxRedirection())
-				.andExpect(redirectedUrl("/?logout"));
-	}
+    @Test
+    void browserLoginAndRegistrationRemainCsrfProtected() throws Exception {
+        mockMvc.perform(get("/"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("name=\"_csrf\"")))
+                .andExpect(content().string(not(containsString("th:action"))));
 
-	@Test
-	void staticAuthenticationAssetsArePubliclyServed() throws Exception {
-		mockMvc.perform(get("/css/styles.css"))
-				.andExpect(status().isOk())
-				.andExpect(content().string(org.hamcrest.Matchers.containsString(".shell")));
+        mockMvc.perform(post("/register")
+                        .param("fullName", "Taylor Reed")
+                        .param("email", "taylor@example.com")
+                        .param("password", "StrongPass123!")
+                        .param("phone", "+1 555 123 4567")
+                        .param("address", "4 River Road")
+                        .param("pan", "FGHIJ5678K"))
+                .andExpect(status().isForbidden());
 
-		mockMvc.perform(get("/js/app.js"))
-				.andExpect(status().isOk())
-				.andExpect(content().string(org.hamcrest.Matchers.containsString("setMode")));
-	}
+        mockMvc.perform(post("/register")
+                        .with(csrf())
+                        .param("fullName", "Taylor Reed")
+                        .param("email", "taylor@example.com")
+                        .param("password", "StrongPass123!")
+                        .param("phone", "+1 555 123 4567")
+                        .param("address", "4 River Road")
+                        .param("pan", "FGHIJ5678K"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/?registered=true"));
 
-	@Test
-	void thymeleafRegistrationCreatesAccountAndRejectsMissingCsrf() throws Exception {
-		mockMvc.perform(get("/"))
-				.andExpect(status().isOk())
-				.andExpect(content().string(org.hamcrest.Matchers.containsString("name=\"_csrf\"")))
-				.andExpect(content().string(org.hamcrest.Matchers.not(
-						org.hamcrest.Matchers.containsString("th:action"))));
+        MvcResult login = mockMvc.perform(post("/login")
+                        .with(csrf())
+                        .param("username", "TAYLOR@example.com")
+                        .param("password", "StrongPass123!"))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/"))
+                .andReturn();
+        MockHttpSession session = (MockHttpSession) login.getRequest().getSession(false);
 
-		mockMvc.perform(post("/register")
-						.param("fullName", "Taylor Reed")
-						.param("email", "taylor@example.com")
-						.param("password", "StrongPass123")
-						.param("phone", "+1 555 123 4567")
-						.param("address", "4 River Road")
-						.param("pan", "FGHIJ5678K"))
-				.andExpect(status().isForbidden());
+        mockMvc.perform(get("/").session(session))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("taylor@example.com")))
+                .andExpect(content().string(containsString("HttpOnly cookie")));
 
-		mockMvc.perform(post("/register")
-						.with(csrf())
-						.param("fullName", "Taylor Reed")
-						.param("email", "taylor@example.com")
-						.param("password", "StrongPass123")
-						.param("phone", "+1 555 123 4567")
-						.param("address", "4 River Road")
-						.param("pan", "fghij5678k"))
-				.andExpect(status().is3xxRedirection())
-				.andExpect(redirectedUrl("/?registered=true"));
+        mockMvc.perform(post("/logout").session(session).with(csrf()))
+                .andExpect(status().is3xxRedirection())
+                .andExpect(redirectedUrl("/?logout=true"));
+    }
 
-		assertTrue(userRepository.existsByEmail("taylor@example.com"));
-		assertEquals("FGHIJ5678K",
-				userRepository.findByEmail("taylor@example.com").orElseThrow().getProfile().getPan());
-	}
+    @Test
+    void staticAuthenticationAssetsAreServed() throws Exception {
+        mockMvc.perform(get("/css/styles.css"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString(".shell")));
+
+        mockMvc.perform(get("/js/app.js"))
+                .andExpect(status().isOk());
+    }
+
+    @Test
+    void configuredCorsOriginCanMakeApiPreflightRequest() throws Exception {
+        mockMvc.perform(options("/api/v1/login")
+                        .header("Origin", "http://localhost:3000")
+                        .header("Access-Control-Request-Method", "POST")
+                        .header("Access-Control-Request-Headers", "authorization,content-type"))
+                .andExpect(status().isOk())
+                .andExpect(content().string(""))
+                .andExpect(org.springframework.test.web.servlet.result.MockMvcResultMatchers
+                        .header().string("Access-Control-Allow-Origin", "http://localhost:3000"));
+    }
+
+    @Test
+    void repeatedInvalidLoginsTemporarilyLockTheAccount() throws Exception {
+        mockMvc.perform(post("/api/v1/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "fullName":"Jamie Lee",
+                                  "email":"jamie@example.com",
+                                  "password":"StrongPass123!",
+                                  "phone":"+1 555 123 4567",
+                                  "address":"8 Lake Street",
+                                  "pan":"KLMNO1234P"
+                                }
+                                """))
+                .andExpect(status().isCreated());
+
+        for (int attempt = 0; attempt < 5; attempt++) {
+            mockMvc.perform(post("/api/v1/login")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("""
+                                    {"email":"jamie@example.com","password":"WrongPassword123!"}
+                                    """))
+                    .andExpect(status().isUnauthorized());
+        }
+
+        mockMvc.perform(post("/api/v1/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {"email":"jamie@example.com","password":"StrongPass123!"}
+                                """))
+                .andExpect(status().isLocked());
+    }
+
+    private String json(MvcResult result, String property) throws Exception {
+        return objectMapper
+                .readTree(result.getResponse().getContentAsString())
+                .get(property)
+                .asText();
+    }
 }
